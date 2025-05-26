@@ -1,4 +1,5 @@
 **DETR**: End-to-End Object Detection with Transformers
+**detr_opt_v1**: optimized detr from original detr and conditional detr
 ========
 
 [![Support Ukraine](https://img.shields.io/badge/Support-Ukraine-FFD500?style=flat&labelColor=005BBB)](https://opensource.fb.com/support-ukraine)
