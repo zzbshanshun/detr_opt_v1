@@ -120,7 +120,7 @@ def make_coco_transforms(image_set):
     ])
 
     scales = [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
-    rmax_size = 992 #default 1333
+    rmax_size = 1080 #992 #default 1333
 
     if image_set == 'train':
         return T.Compose([
