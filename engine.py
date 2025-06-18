@@ -69,6 +69,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         '''
     
+        #'''
         iter_count = iter_count+1
         my_context = model.no_sync if local_rank != -1 and iter_count % vir_batch != 0 else nullcontext
         
@@ -96,16 +97,17 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
             if max_norm > 0:
                 if vir_batch > 1:
-                    vb_max_norm = max_norm*vir_batch*0.8
+                    vb_max_norm = max_norm*vir_batch
                 else:
                     vb_max_norm = max_norm
-                torch.nn.utils.clip_grad_norm_(model.parameters(), vb_max_norm)
+                total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), vb_max_norm)
             optimizer.step() 
             optimizer.zero_grad()
 
             metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
             metric_logger.update(class_error=loss_dict_reduced['class_error'])
             metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+    #'''
         
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()

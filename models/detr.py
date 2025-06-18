@@ -88,8 +88,10 @@ class DETR(nn.Module):
             tmp = self.bbox_embed(hs[lvl])
             # tmp[..., :2] += reference_before_sigmoid
             # tmp += reference_before_sigmoid
-            tmp[..., :2] += reference_before_sigmoid[..., :2]
-            tmp[..., 2:] *= reference_before_sigmoid[..., 2:]
+            # tmp[..., :2] += reference_before_sigmoid[..., :2]
+            # tmp[..., 2:] *= reference_before_sigmoid[..., 2:]
+            tmp[..., :2] += reference_before_sigmoid[lvl][..., :2]
+            tmp[..., 2:] *= reference_before_sigmoid[lvl][..., 2:]
             outputs_coord = tmp.sigmoid()
             outputs_coords.append(outputs_coord)
         outputs_coord = torch.stack(outputs_coords)

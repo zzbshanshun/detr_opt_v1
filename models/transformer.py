@@ -111,6 +111,8 @@ class Transformer(nn.Module):
 
         self.d_model = d_model
         self.nhead = nhead
+        
+        self.box_embed = nn.Embedding(300, 4)
 
     def _reset_parameters(self):
         for p in self.parameters():
@@ -124,11 +126,13 @@ class Transformer(nn.Module):
         pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
         query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
         mask = mask.flatten(1)
+        
+        box_embed = self.box_embed.weight.unsqueeze(1).repeat(1, bs, 1)
 
         tgt = torch.zeros_like(query_embed)
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
         hs, references = self.decoder(tgt, memory, memory_key_padding_mask=mask,
-                          pos=pos_embed, query_pos=query_embed)
+                          pos=pos_embed, query_pos=query_embed, box_embed=box_embed)
         # return hs.transpose(1, 2), memory.permute(1, 2, 0).view(bs, c, h, w)
         return hs.transpose(1, 2), references, memory.permute(1, 2, 0).view(bs, c, h, w)
 
@@ -144,6 +148,7 @@ class TransformerDecoder(nn.Module):
         
         self.query_scale = MLP(d_model, d_model, d_model, 2)
         self.ref_point_head = MLP(d_model, d_model, 4, 2)
+        # self.ref_point_head2 = MLP(4, d_model, 4, 2)
         for layer_id in range(num_layers - 1):
             self.layers[layer_id + 1].ca_qpos_proj = None
         
@@ -152,6 +157,9 @@ class TransformerDecoder(nn.Module):
         self.layers[0].ca_kcontent_proj = None
         self.layers[0].ca_kpos_proj = None
         self.layers[0].ca_qcontent_proj = None
+        
+        self.box_offs = nn.ModuleList(MLP(4, d_model//2, 4, 2) for i in range(num_layers))
+        
 
     def forward(self, tgt, memory,
                 tgt_mask: Optional[Tensor] = None,
@@ -159,24 +167,33 @@ class TransformerDecoder(nn.Module):
                 tgt_key_padding_mask: Optional[Tensor] = None,
                 memory_key_padding_mask: Optional[Tensor] = None,
                 pos: Optional[Tensor] = None,
-                query_pos: Optional[Tensor] = None):
+                query_pos: Optional[Tensor] = None,
+                box_embed: Optional[Tensor] = None):
         output = tgt
         # output_pos = tgt
 
         intermediate = []
+        reference_points_lvl=[]
         # reference points
         reference_points_before_sigmoid = self.ref_point_head(query_pos)    # [num_queries, batch_size, 2]
-        reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
+        # reference_points_before_sigmoid += box_embed
+        # reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
 
         for layer_id, layer in enumerate(self.layers):
+            
             # obj_center = reference_points[..., :2].transpose(0, 1)      # [num_queries, batch_size, 2]
-            obj_center = reference_points[..., :].transpose(0, 1)      # [num_queries, batch_size, 2]
+            # obj_center = reference_points[..., :].transpose(0, 1)      # [num_queries, batch_size, 2]
 
             # For the first decoder layer, we do not apply transformation over p_s
             if layer_id == 0:
                 pos_transformation = 1
             else:
                 pos_transformation = self.query_scale(output)
+            
+            reference_points_before_sigmoid = reference_points_before_sigmoid + self.box_offs[layer_id](box_embed)
+            
+            reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
+            obj_center = reference_points[..., :].transpose(0, 1)
 
             # # get sine embedding for the query vector
             # query_sine_embed = gen_sineembed_for_position(obj_center)
@@ -184,6 +201,7 @@ class TransformerDecoder(nn.Module):
             # query_sine_embed = query_sine_embed * pos_transformation
 
             query_sine_embed = gen_sineembed_for_position4(obj_center) * pos_transformation
+            # pdb.set_trace()
 
             # do layer compute
             output, _ = layer(output, memory, tgt_mask=tgt_mask,
@@ -195,6 +213,7 @@ class TransformerDecoder(nn.Module):
             # output = output + output_pos
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
+                reference_points_lvl.append(reference_points)
         
         if self.norm is not None:
             output = self.norm(output)
@@ -206,7 +225,7 @@ class TransformerDecoder(nn.Module):
         #     return torch.stack(intermediate)
 
         if self.return_intermediate:
-            return [torch.stack(intermediate), reference_points]
+            return [torch.stack(intermediate), torch.stack(reference_points_lvl)]
 
         return output.unsqueeze(0)
 
@@ -259,7 +278,8 @@ class TransformerDecoderLayer(nn.Module):
         self.linear_pos2 = nn.Linear(dim_feedforward, d_model)
         
         self.norm_add = nn.LayerNorm(d_model)
-        
+
+        # self.ca_v_prob = MLP(d_model, d_model, 1, 2)
         
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
@@ -307,13 +327,21 @@ class TransformerDecoderLayer(nn.Module):
         
         atten_mode = 0
         if atten_mode == 0:
+            # q_prob = self.ca_v_prob(tgt)
+            # q_prob = F.softmax(q_prob, 0)
+            # q_prob = -((1 - q_prob+1e-5) / (q_prob+1e-5)).log()
+
             # use multihead_attn twice for context and position
             tgt2 = self.multihead_attn(query=q, key=k, value=v, attn_mask=memory_mask,
                                     key_padding_mask=memory_key_padding_mask)[0]
             v_pos = self.ca_v_proj_pos(memory)
             tgt2_pos = self.multihead_attn(query=query_sine_embed, key=k_pos, value=v_pos, attn_mask=memory_mask,
                                             key_padding_mask=memory_key_padding_mask)[0]  
-            tgt2 += tgt2_pos 
+            tgt2 += tgt2_pos
+
+            # q_pos_prob = self.ca_v_prob(tgt)
+            # q_pos_prob = F.softmax(q_pos_prob, 0)
+            # q_pos_prob = -((1 - q_pos_prob+1e-4) / (q_pos_prob+1e-4)).log()
             
             tgt_pos = tgt + self.dropout_pos2(tgt2_pos)
             tgt_pos = self.norm_pos2(tgt_pos)

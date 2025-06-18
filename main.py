@@ -76,11 +76,11 @@ def get_args_parser():
     # * Loss coefficients
     parser.add_argument('--mask_loss_coef', default=1, type=float)
     parser.add_argument('--dice_loss_coef', default=1, type=float)
-    parser.add_argument('--bbox_loss_coef', default=5, type=float)
-    parser.add_argument('--giou_loss_coef', default=2, type=float)
+    parser.add_argument('--bbox_loss_coef', default=5, type=float) # 5
+    parser.add_argument('--giou_loss_coef', default=2, type=float) #2
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
-    parser.add_argument('--cls_loss_coef', default=2, type=float)
+    parser.add_argument('--cls_loss_coef', default=2, type=float) # 2
     parser.add_argument('--focal_alpha', default=0.25, type=float)
 
     # dataset parameters
