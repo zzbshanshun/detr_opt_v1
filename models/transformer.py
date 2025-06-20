@@ -148,7 +148,6 @@ class TransformerDecoder(nn.Module):
         
         self.query_scale = MLP(d_model, d_model, d_model, 2)
         self.ref_point_head = MLP(d_model, d_model, 4, 2)
-        # self.ref_point_head2 = MLP(4, d_model, 4, 2)
         for layer_id in range(num_layers - 1):
             self.layers[layer_id + 1].ca_qpos_proj = None
         
@@ -158,8 +157,7 @@ class TransformerDecoder(nn.Module):
         self.layers[0].ca_kpos_proj = None
         self.layers[0].ca_qcontent_proj = None
         
-        self.box_offs = nn.ModuleList(MLP(4, d_model//2, 4, 2) for i in range(num_layers))
-        
+        self.box_offs = nn.ModuleList(MLP(4, d_model//2, 4, 2) for i in range(num_layers))        
 
     def forward(self, tgt, memory,
                 tgt_mask: Optional[Tensor] = None,
@@ -180,9 +178,7 @@ class TransformerDecoder(nn.Module):
         # reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
 
         for layer_id, layer in enumerate(self.layers):
-            
             # obj_center = reference_points[..., :2].transpose(0, 1)      # [num_queries, batch_size, 2]
-            # obj_center = reference_points[..., :].transpose(0, 1)      # [num_queries, batch_size, 2]
 
             # For the first decoder layer, we do not apply transformation over p_s
             if layer_id == 0:
@@ -191,7 +187,6 @@ class TransformerDecoder(nn.Module):
                 pos_transformation = self.query_scale(output)
             
             reference_points_before_sigmoid = reference_points_before_sigmoid + self.box_offs[layer_id](box_embed)
-            
             reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
             obj_center = reference_points[..., :].transpose(0, 1)
 
@@ -210,7 +205,8 @@ class TransformerDecoder(nn.Module):
                            memory_key_padding_mask=memory_key_padding_mask,
                            pos=pos, query_pos=query_pos, query_sine_embed=query_sine_embed,
                            is_first=(layer_id == 0))
-            # output = output + output_pos
+            
+
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
                 reference_points_lvl.append(reference_points)
