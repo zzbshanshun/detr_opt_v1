@@ -1,7 +1,7 @@
 ## nohup bash run_train_det.sh > ./output/train_det.log 2>&1 &
 # conda activate troch_2.4.0
-OutputDir=./output/md4
-BatchSize=7
+OutputDir=./output/md12
+BatchSize=6
 CostClass=2
 CostBbox=5
 CostGiou=2

@@ -233,13 +233,13 @@ class MetricLogger(object):
                         meters=str(self),
                         time=str(iter_time), data=str(data_time),
                         memory=torch.cuda.max_memory_allocated() / MB))
-                    print("--------\n")
+                    print("--------")
                 else:
                     print(log_msg.format(
                         i, len(iterable), eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
-                    print("--------\n")
+                    print("--------")
             i += 1
             end = time.time()
         total_time = time.time() - start_time

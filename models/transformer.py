@@ -17,6 +17,8 @@ import math, pdb
 
 from .attention import MultiheadAttention
 
+from util.misc import inverse_sigmoid
+
 class MLP(nn.Module):
     """ Very simple multi-layer perceptron (also called FFN)"""
 
@@ -93,7 +95,8 @@ class Transformer(nn.Module):
     def __init__(self, d_model=512, nhead=8, num_encoder_layers=6,
                  num_decoder_layers=6, dim_feedforward=2048, dropout=0.1,
                  activation="relu", normalize_before=False,
-                 return_intermediate_dec=False):
+                 return_intermediate_dec=False,
+                 num_queries = 300):
         super().__init__()
 
         encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
@@ -111,15 +114,19 @@ class Transformer(nn.Module):
 
         self.d_model = d_model
         self.nhead = nhead
-        
-        self.box_embed = nn.Embedding(300, 4)
+        self.num_dec_layers = num_decoder_layers
+        self.num_queries = num_queries
+        # self.box_embed = nn.Embedding(num_queries, 4)
+
+        # self.ref_point_head = MLP(d_model, d_model, 4, 2)
+        self.ref_point_head = nn.Conv2d(d_model, 4, kernel_size=1)
 
     def _reset_parameters(self):
         for p in self.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src, mask, query_embed, pos_embed):
+    def forward(self, src, mask, query_embed, pos_embed, src_box_embed):
         # flatten NxCxHxW to HWxNxC
         bs, c, h, w = src.shape
         src = src.flatten(2).permute(2, 0, 1)
@@ -127,7 +134,9 @@ class Transformer(nn.Module):
         query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
         mask = mask.flatten(1)
         
-        box_embed = self.box_embed.weight.unsqueeze(1).repeat(1, bs, 1)
+        # pdb.set_trace()
+        box_embed = self.ref_point_head(src_box_embed).flatten(2).permute(2, 0, 1)
+        # box_embed = self.box_embed.weight.unsqueeze(1).repeat(1, bs, 1)
 
         tgt = torch.zeros_like(query_embed)
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
@@ -157,7 +166,7 @@ class TransformerDecoder(nn.Module):
         self.layers[0].ca_kpos_proj = None
         self.layers[0].ca_qcontent_proj = None
         
-        self.box_offs = nn.ModuleList(MLP(4, d_model//2, 4, 2) for i in range(num_layers))        
+        self.box_offs = nn.ModuleList(MLP(4, d_model//2, 4, 2) for i in range(num_layers))    
 
     def forward(self, tgt, memory,
                 tgt_mask: Optional[Tensor] = None,
@@ -178,7 +187,7 @@ class TransformerDecoder(nn.Module):
         # reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
 
         for layer_id, layer in enumerate(self.layers):
-            # obj_center = reference_points[..., :2].transpose(0, 1)      # [num_queries, batch_size, 2]
+            # obj_center = reference_points[..., :].transpose(0, 1)
 
             # For the first decoder layer, we do not apply transformation over p_s
             if layer_id == 0:
@@ -186,8 +195,8 @@ class TransformerDecoder(nn.Module):
             else:
                 pos_transformation = self.query_scale(output)
             
-            reference_points_before_sigmoid = reference_points_before_sigmoid + self.box_offs[layer_id](box_embed)
-            reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
+            reference_points_before_sigmoid_new = reference_points_before_sigmoid + self.box_offs[layer_id](box_embed)
+            reference_points = reference_points_before_sigmoid_new.sigmoid().transpose(0, 1)
             obj_center = reference_points[..., :].transpose(0, 1)
 
             # # get sine embedding for the query vector
@@ -274,8 +283,6 @@ class TransformerDecoderLayer(nn.Module):
         self.linear_pos2 = nn.Linear(dim_feedforward, d_model)
         
         self.norm_add = nn.LayerNorm(d_model)
-
-        # self.ca_v_prob = MLP(d_model, d_model, 1, 2)
         
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
@@ -323,10 +330,6 @@ class TransformerDecoderLayer(nn.Module):
         
         atten_mode = 0
         if atten_mode == 0:
-            # q_prob = self.ca_v_prob(tgt)
-            # q_prob = F.softmax(q_prob, 0)
-            # q_prob = -((1 - q_prob+1e-5) / (q_prob+1e-5)).log()
-
             # use multihead_attn twice for context and position
             tgt2 = self.multihead_attn(query=q, key=k, value=v, attn_mask=memory_mask,
                                     key_padding_mask=memory_key_padding_mask)[0]
@@ -334,10 +337,6 @@ class TransformerDecoderLayer(nn.Module):
             tgt2_pos = self.multihead_attn(query=query_sine_embed, key=k_pos, value=v_pos, attn_mask=memory_mask,
                                             key_padding_mask=memory_key_padding_mask)[0]  
             tgt2 += tgt2_pos
-
-            # q_pos_prob = self.ca_v_prob(tgt)
-            # q_pos_prob = F.softmax(q_pos_prob, 0)
-            # q_pos_prob = -((1 - q_pos_prob+1e-4) / (q_pos_prob+1e-4)).log()
             
             tgt_pos = tgt + self.dropout_pos2(tgt2_pos)
             tgt_pos = self.norm_pos2(tgt_pos)
@@ -524,6 +523,7 @@ def build_transformer(args):
         num_decoder_layers=args.dec_layers,
         normalize_before=args.pre_norm,
         return_intermediate_dec=True,
+        num_queries = args.num_queries
     )
 
 
