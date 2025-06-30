@@ -40,7 +40,7 @@ class DETR(nn.Module):
         hidden_dim = transformer.d_model
         self.class_embed = nn.Linear(hidden_dim, num_classes )
         # self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
-        self.bbox_embed = nn.ModuleList([MLP(hidden_dim, hidden_dim//2, 4, 3) for i in range(transformer.num_dec_layers)])
+        self.bbox_embed = nn.ModuleList([MLP(hidden_dim, hidden_dim, 4, 2) for i in range(transformer.num_dec_layers)])
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
@@ -65,7 +65,7 @@ class DETR(nn.Module):
         shape = 18
         self.max_pool = nn.AdaptiveMaxPool2d(shape)
         self.query_pos_box = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
-        # self.avg_pool = nn.AdaptiveAvgPool2d(shape)
+        self.avg_pool = nn.AdaptiveAvgPool2d(shape)
 
     def forward(self, samples: NestedTensor):
         """ The forward expects a NestedTensor, which consists of:
@@ -92,11 +92,12 @@ class DETR(nn.Module):
         # outputs_coord = self.bbox_embed(hs).sigmoid()
 
         # pdb.set_trace()
-        src_qpos0 = self.max_pool(src)
-        src_qpos = F.relu(self.query_pos_box(src_qpos0))
+        src_qpos = self.query_pos_box(src)
+        src_qpos = self.avg_pool(src_qpos)
+        
+        # src_qpos = F.relu(self.query_pos_box(src_qpos0))
         # src_qpos0 = self.query_pos_box0(src)
         # src_qpos1 = self.query_pos_box1(src_qpos0)
-        # src_qpos = F.interpolate(src_qpos1, size=(18, 18), mode='bilinear', align_corners=False)
         
         # test 
         hs, reference = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1], src_qpos)[0:2]
@@ -105,13 +106,13 @@ class DETR(nn.Module):
         for lvl in range(hs.shape[0]):
             tmp = self.bbox_embed[lvl](hs[lvl])
             # tmp = self.bbox_embed(hs[lvl])
+            
             # tmp[..., :2] += reference_before_sigmoid
-            # tmp += reference_before_sigmoid
+            tmp += reference_before_sigmoid[lvl]
+            
             # tmp[..., :2] += reference_before_sigmoid[..., :2]
             # tmp[..., 2:] *= reference_before_sigmoid[..., 2:]
             
-            tmp[..., :2] += reference_before_sigmoid[lvl][..., :2]
-            tmp[..., 2:] += reference_before_sigmoid[lvl][..., 2:]
             outputs_coord = tmp.sigmoid()
             outputs_coords.append(outputs_coord)
         outputs_coord = torch.stack(outputs_coords)
