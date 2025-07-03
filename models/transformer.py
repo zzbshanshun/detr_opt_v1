@@ -142,11 +142,6 @@ class Transformer(nn.Module):
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
         memory_2d = memory.permute(1, 2, 0).view(bs, c, h, w)
 
-        # pdb.set_trace()
-        # memory_box = self.query_pos_box(memory_2d)
-        # box_embed = self.avg_pool(memory_box)
-        # box_embed = self.ref_point_head(memory_box).flatten(2).permute(2, 0, 1)
-
         hs, references = self.decoder(tgt, memory, memory_key_padding_mask=mask,
                           pos=pos_embed, query_pos=query_embed, box_embed=src_box_embed)
         # return hs.transpose(1, 2), memory.permute(1, 2, 0).view(bs, c, h, w)
@@ -206,8 +201,8 @@ class TransformerDecoder(nn.Module):
                 # box_off = box_embed*self.box_offs[layer_id-1](output)
                 box_off = self.ref_point_heads[layer_id-1](box_embed).flatten(2).permute(2, 0, 1)
             
-            reference_points_before_sigmoid = (reference_points_before_sigmoid + box_off)
-            reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
+            reference_points_before_sigmoid_new = (reference_points_before_sigmoid + box_off)
+            reference_points = reference_points_before_sigmoid_new.sigmoid().transpose(0, 1)
             # reference_points = reference_points_new.detach()
             obj_center = reference_points[..., :].transpose(0, 1)
 
@@ -217,7 +212,6 @@ class TransformerDecoder(nn.Module):
             # query_sine_embed = query_sine_embed * pos_transformation
 
             query_sine_embed = gen_sineembed_for_position4(obj_center) * pos_transformation
-            # pdb.set_trace()
 
             # do layer compute
             output, _ = layer(output, memory, tgt_mask=tgt_mask,
