@@ -46,8 +46,6 @@ class DETR(nn.Module):
         self.backbone = backbone
         self.aux_loss = aux_loss
         
-        # self.qpos_embed = QueryPositionEmbeddingLearned(query_num=int(math.sqrt(num_queries)+0.5))
-
         # # init prior_prob setting for focal loss
         prior_prob = 0.01
         bias_value = -math.log((1 - prior_prob) / prior_prob)
@@ -63,9 +61,9 @@ class DETR(nn.Module):
 
         # generte query pos from src
         shape = 18
-        self.max_pool = nn.AdaptiveMaxPool2d(shape)
         self.query_pos_box = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.avg_pool = nn.AdaptiveAvgPool2d(shape)
+        # self.max_pool = nn.AdaptiveMaxPool2d(shape)
 
     def forward(self, samples: NestedTensor):
         """ The forward expects a NestedTensor, which consists of:
@@ -91,23 +89,18 @@ class DETR(nn.Module):
         # hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
         # outputs_coord = self.bbox_embed(hs).sigmoid()
 
-        # pdb.set_trace()
-        src_qpos = self.query_pos_box(src)
-        src_qpos = self.avg_pool(src_qpos)
-        
-        # src_qpos = F.relu(self.query_pos_box(src_qpos0))
-        # src_qpos0 = self.query_pos_box0(src)
-        # src_qpos1 = self.query_pos_box1(src_qpos0)
+        src_base = self.query_pos_box(src)
+        src_qpos = self.avg_pool(src_base)
         
         # test 
         hs, reference = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1], src_qpos)[0:2]
         reference_before_sigmoid = inverse_sigmoid(reference)
         outputs_coords = []
         for lvl in range(hs.shape[0]):
-            tmp = self.bbox_embed[lvl](hs[lvl])
             # tmp = self.bbox_embed(hs[lvl])
-            
             # tmp[..., :2] += reference_before_sigmoid
+
+            tmp = self.bbox_embed[lvl](hs[lvl])
             tmp += reference_before_sigmoid[lvl]
             
             # tmp[..., :2] += reference_before_sigmoid[..., :2]

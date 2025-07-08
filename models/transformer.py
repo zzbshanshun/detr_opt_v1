@@ -118,9 +118,6 @@ class Transformer(nn.Module):
         self.num_queries = num_queries
         # self.box_embed = nn.Embedding(num_queries, 4)
 
-        # self.ref_point_head = MLP(d_model, d_model, 4, 2)
-        # self.ref_point_head = nn.Conv2d(d_model, 4, kernel_size=1)
-
     def _reset_parameters(self):
         for p in self.parameters():
             if p.dim() > 1:
@@ -168,8 +165,6 @@ class TransformerDecoder(nn.Module):
         self.layers[0].ca_kpos_proj = None
         self.layers[0].ca_qcontent_proj = None
         
-        # self.box_offs = nn.ModuleList(MLP(4, d_model//2, 4, 2) for i in range(num_layers))
-        # self.box_offs = nn.ModuleList(MLP(d_model, d_model//2, 4, 2) for i in range(num_layers-1))
         self.ref_point_heads = nn.ModuleList(nn.Conv2d(d_model, 4, kernel_size=1) for i in range(num_layers-1))
 
     def forward(self, tgt, memory,
@@ -198,7 +193,6 @@ class TransformerDecoder(nn.Module):
                 box_off = 0
             else:
                 pos_transformation = self.query_scale(output)
-                # box_off = box_embed*self.box_offs[layer_id-1](output)
                 box_off = self.ref_point_heads[layer_id-1](box_embed).flatten(2).permute(2, 0, 1)
             
             reference_points_before_sigmoid_new = (reference_points_before_sigmoid + box_off)
@@ -221,7 +215,6 @@ class TransformerDecoder(nn.Module):
                            pos=pos, query_pos=query_pos, query_sine_embed=query_sine_embed,
                            is_first=(layer_id == 0))
             
-
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
                 reference_points_lvl.append(reference_points)
