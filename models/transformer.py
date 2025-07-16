@@ -116,7 +116,8 @@ class Transformer(nn.Module):
         self.nhead = nhead
         self.num_dec_layers = num_decoder_layers
         self.num_queries = num_queries
-        # self.box_embed = nn.Embedding(num_queries, 4)
+
+        self.norm_mem = nn.LayerNorm(d_model)
 
     def _reset_parameters(self):
         for p in self.parameters():
@@ -131,18 +132,14 @@ class Transformer(nn.Module):
         query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
         mask = mask.flatten(1)
         
-        # pdb.set_trace()
-        # box_embed = self.ref_point_head(src_box_embed).flatten(2).permute(2, 0, 1)
-        # box_embed = self.box_embed.weight.unsqueeze(1).repeat(1, bs, 1)
-
         tgt = torch.zeros_like(query_embed)
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
-        memory_2d = memory.permute(1, 2, 0).view(bs, c, h, w)
-
+        memory = self.norm_mem(memory+src)
+        
         hs, references = self.decoder(tgt, memory, memory_key_padding_mask=mask,
                           pos=pos_embed, query_pos=query_embed, box_embed=src_box_embed)
         # return hs.transpose(1, 2), memory.permute(1, 2, 0).view(bs, c, h, w)
-        return hs.transpose(1, 2), references, memory_2d
+        return hs.transpose(1, 2), references
 
 
 class TransformerDecoder(nn.Module):
@@ -206,7 +203,7 @@ class TransformerDecoder(nn.Module):
             # query_sine_embed = query_sine_embed * pos_transformation
 
             query_sine_embed = gen_sineembed_for_position4(obj_center) * pos_transformation
-
+            
             # do layer compute
             output, _ = layer(output, memory, tgt_mask=tgt_mask,
                            memory_mask=memory_mask,
@@ -214,7 +211,7 @@ class TransformerDecoder(nn.Module):
                            memory_key_padding_mask=memory_key_padding_mask,
                            pos=pos, query_pos=query_pos, query_sine_embed=query_sine_embed,
                            is_first=(layer_id == 0))
-            
+
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
                 reference_points_lvl.append(reference_points)

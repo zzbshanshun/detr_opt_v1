@@ -64,6 +64,7 @@ class DETR(nn.Module):
         self.query_pos_box = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.avg_pool = nn.AdaptiveAvgPool2d(shape)
         # self.max_pool = nn.AdaptiveMaxPool2d(shape)
+                    
 
     def forward(self, samples: NestedTensor):
         """ The forward expects a NestedTensor, which consists of:
@@ -96,6 +97,7 @@ class DETR(nn.Module):
         hs, reference = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1], src_qpos)[0:2]
         reference_before_sigmoid = inverse_sigmoid(reference)
         outputs_coords = []
+
         for lvl in range(hs.shape[0]):
             # tmp = self.bbox_embed(hs[lvl])
             # tmp[..., :2] += reference_before_sigmoid
@@ -107,10 +109,9 @@ class DETR(nn.Module):
             # tmp[..., 2:] *= reference_before_sigmoid[..., 2:]
             
             outputs_coord = tmp.sigmoid()
-            outputs_coords.append(outputs_coord)
+            outputs_coords.append(outputs_coord) 
         outputs_coord = torch.stack(outputs_coords)
         #########
-        
         outputs_class = self.class_embed(hs)
         
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
@@ -164,7 +165,6 @@ class SetCriterion(nn.Module):
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
                                     dtype=torch.int64, device=src_logits.device)
         target_classes[idx] = target_classes_o
-        # pdb.set_trace()
         # src_logits shape: [5, 100, 92] -> [5, 92, 100], target_classes : [5, 100]
         loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
         losses = {'loss_ce': loss_ce}
