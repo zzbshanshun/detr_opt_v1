@@ -64,7 +64,6 @@ class DETR(nn.Module):
         self.query_pos_box = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.avg_pool = nn.AdaptiveAvgPool2d(shape)
         # self.max_pool = nn.AdaptiveMaxPool2d(shape)
-                    
 
     def forward(self, samples: NestedTensor):
         """ The forward expects a NestedTensor, which consists of:

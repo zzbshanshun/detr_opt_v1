@@ -163,6 +163,9 @@ class TransformerDecoder(nn.Module):
         self.layers[0].ca_qcontent_proj = None
         
         self.ref_point_heads = nn.ModuleList(nn.Conv2d(d_model, 4, kernel_size=1) for i in range(num_layers-1))
+        
+        self.map_add_out = nn.ModuleList(MLP(d_model, d_model, d_model, 2) for i in range(num_layers-1))
+        self.map_add_norm = nn.LayerNorm(d_model)
 
     def forward(self, tgt, memory,
                 tgt_mask: Optional[Tensor] = None,
@@ -188,9 +191,11 @@ class TransformerDecoder(nn.Module):
             if layer_id == 0:
                 pos_transformation = 1
                 box_off = 0
+                out_res = 0
             else:
                 pos_transformation = self.query_scale(output)
                 box_off = self.ref_point_heads[layer_id-1](box_embed).flatten(2).permute(2, 0, 1)
+                out_res = self.map_add_out[layer_id-1](output)
             
             reference_points_before_sigmoid_new = (reference_points_before_sigmoid + box_off)
             reference_points = reference_points_before_sigmoid_new.sigmoid().transpose(0, 1)
@@ -205,12 +210,16 @@ class TransformerDecoder(nn.Module):
             query_sine_embed = gen_sineembed_for_position4(obj_center) * pos_transformation
             
             # do layer compute
-            output, _ = layer(output, memory, tgt_mask=tgt_mask,
+            output_new, _ = layer(output, memory, tgt_mask=tgt_mask,
                            memory_mask=memory_mask,
                            tgt_key_padding_mask=tgt_key_padding_mask,
                            memory_key_padding_mask=memory_key_padding_mask,
                            pos=pos, query_pos=query_pos, query_sine_embed=query_sine_embed,
                            is_first=(layer_id == 0))
+             
+            output = self.map_add_norm(out_res + output_new)
+
+            # reference_points_before_sigmoid = reference_points_before_sigmoid_new
 
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
@@ -228,7 +237,7 @@ class TransformerDecoder(nn.Module):
         if self.return_intermediate:
             return [torch.stack(intermediate), torch.stack(reference_points_lvl)]
 
-        return output.unsqueeze(0)
+        return output.unsqueeze(0), reference_points.unsqueeze(0)
 
 class TransformerDecoderLayer(nn.Module):
 
@@ -241,9 +250,9 @@ class TransformerDecoderLayer(nn.Module):
         # self.multihead_attn = nn.MultiheadAttention(d_model*2, nhead, dropout=dropout)
         
         # Implementation of Feedforward model
-        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.linear1 = nn.Linear(d_model, dim_feedforward//2)
         self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(dim_feedforward, d_model)
+        self.linear2 = nn.Linear(dim_feedforward//2, d_model)
 
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
@@ -268,15 +277,15 @@ class TransformerDecoderLayer(nn.Module):
         # split position, test two multihead_attn
         self.ca_v_proj_pos = nn.Linear(d_model, d_model)
         
-        # self.norm_pos1 = nn.LayerNorm(d_model)
+        # for tgt_pos  mode=0/2
         self.norm_pos2 = nn.LayerNorm(d_model)
         self.norm_pos3 = nn.LayerNorm(d_model)
         self.dropout_pos2 = nn.Dropout(dropout)
         self.dropout_pos3 = nn.Dropout(dropout)
         
-        self.linear_pos1 = nn.Linear(d_model, dim_feedforward)
+        self.linear_pos1 = nn.Linear(d_model, dim_feedforward//2)
         self.dropout_pos = nn.Dropout(dropout)
-        self.linear_pos2 = nn.Linear(dim_feedforward, d_model)
+        self.linear_pos2 = nn.Linear(dim_feedforward//2, d_model)
         
         self.norm_add = nn.LayerNorm(d_model)
         
@@ -339,6 +348,7 @@ class TransformerDecoderLayer(nn.Module):
             tgt2_pos = self.linear_pos2(self.dropout_pos(self.activation(self.linear_pos1(tgt_pos))))
             tgt_pos = tgt_pos + self.dropout_pos3(tgt2_pos)
             tgt_pos = self.norm_pos3(tgt_pos)
+            
         elif atten_mode == 1:
             # 0.025
             num_queries, bs, n_model = q_content.shape
@@ -362,12 +372,13 @@ class TransformerDecoderLayer(nn.Module):
             tgt2_cat = self.multihead_attn(query=q_cat, key=k_cat, value=v_cat, attn_mask=memory_mask,
                                             key_padding_mask=memory_key_padding_mask)[0]
             n_q,_, n_model = tgt2_cat.shape
+            
             tgt2 = tgt2_cat[..., :n_model//2] + tgt2_cat[..., n_model//2:]
         else:
             tgt2 = self.multihead_attn(query=self.with_pos_embed(q, query_sine_embed),
-                                   key=self.with_pos_embed(k, k_pos),
-                                   value=v, attn_mask=memory_mask,
-                                   key_padding_mask=memory_key_padding_mask)[0]
+                                        key=self.with_pos_embed(k, k_pos),
+                                        value=v, attn_mask=memory_mask,
+                                        key_padding_mask=memory_key_padding_mask)[0]
 
         tgt = tgt + self.dropout2(tgt2)
         tgt = self.norm2(tgt)
