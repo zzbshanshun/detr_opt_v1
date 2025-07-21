@@ -35,7 +35,8 @@ class MLP(nn.Module):
     
 def gen_sineembed_for_position(pos_tensor):
     # n_query, bs, _ = pos_tensor.size()
-    # sineembed_tensor = torch.zeros(n_query, bs, 256)
+    # sineembed_tensor = torch.zeros(n_query, bs, 256) 
+
     scale = 2 * math.pi
     dim_t = torch.arange(128, dtype=torch.float32, device=pos_tensor.device)
     dim_t = 10000 ** (2 * (dim_t // 2) / 128)
@@ -87,6 +88,101 @@ def gen_sineembed_for_position2(pos_tensor):
     pos = torch.cat((pos_y, pos_x), dim=2)
     return pos
 
+class UpdateGate(nn.Module):
+    def __init__(self, d_model, num_layers, gate_type="adaptive", use_highway=False):
+        """
+        门控更新机制
+        
+        参数:
+            d_model: 特征维度
+            num_layers: 解码器层数
+            gate_type: 门控类型 ["adaptive", "static", "learned"]
+            use_highway: 是否使用高速连接
+        """
+        super().__init__()
+        self.gate_type = gate_type
+        self.use_highway = use_highway
+        self.num_layers = num_layers
+        
+        # 自适应门控
+        if gate_type == "adaptive":
+            self.gate_nets = nn.ModuleList([
+                nn.Sequential(
+                    nn.Linear(d_model + d_model, d_model),
+                    nn.ReLU(),
+                    nn.Linear(d_model, 1),
+                    nn.Sigmoid()
+                ) for _ in range(num_layers - 1)
+            ])
+        
+        # 静态门控参数
+        elif gate_type == "static":
+            self.static_gates = nn.Parameter(torch.linspace(0.8, 0.3, num_layers-1))
+        
+        # 可学习门控参数
+        elif gate_type == "learned":
+            self.learned_gates = nn.Parameter(torch.ones(num_layers-1) * 0.5)
+        
+        # 高速连接参数
+        if use_highway:
+            self.highway_weights = nn.Parameter(torch.zeros(num_layers-1))
+        
+        # 稳定性控制
+        self.gate_clamp = 0.2  # 门控最小变化量
+        self.momentum = 0.1    # 指数移动平均动量
+    
+    def forward(self, layer_id, output, box_off, prev_gate=None):
+        """
+        计算门控值
+        
+        参数:
+            layer_id: 当前层ID (从1开始)
+            output: 解码器输出特征 [num_queries, batch_size, d_model]
+            box_off: 预测的框偏移量 [num_queries, batch_size, 4]
+            prev_gate: 前一层门控值 (用于稳定性控制)
+            
+        返回:
+            gate_value: 门控值 [num_queries, batch_size, 1]
+            highway_weight: 高速连接权重 (如果使用)
+        """
+        # 第一层不使用门控
+        if layer_id == 0:
+            return 1.0, None
+        
+        # 实际索引 (0到num_layers-2)
+        gate_idx = layer_id - 1
+        
+        # 根据门控类型计算门控值
+        if self.gate_type == "adaptive":
+            # 拼接特征和偏移量
+            # box_off_proj = box_off.mean(dim=-1, keepdim=True)  # 简化处理
+            gate_input = torch.cat([output, box_off], dim=-1)
+            
+            # 计算门控值
+            gate_value = self.gate_nets[gate_idx](gate_input)
+        
+        elif self.gate_type == "static":
+            gate_value = torch.ones_like(output[:, :, :1]) * self.static_gates[gate_idx]
+        
+        elif self.gate_type == "learned":
+            gate_value = torch.ones_like(output[:, :, :1]) * torch.sigmoid(self.learned_gates[gate_idx])
+        
+        # 稳定性控制
+        if prev_gate is not None:
+            # 指数移动平均
+            gate_value = (1 - self.momentum) * prev_gate + self.momentum * gate_value
+            
+            # 限制最小变化量
+            min_gate = torch.clamp(prev_gate - self.gate_clamp, 0, 1)
+            max_gate = torch.clamp(prev_gate + self.gate_clamp, 0, 1)
+            gate_value = torch.clamp(gate_value, min_gate, max_gate)
+        
+        # 高速连接权重
+        highway_weight = None
+        if self.use_highway:
+            highway_weight = torch.sigmoid(self.highway_weights[gate_idx])
+        
+        return gate_value, highway_weight
 
 #''' 
 # detr################################################
@@ -137,7 +233,7 @@ class Transformer(nn.Module):
         memory = self.norm_mem(memory+src)
         
         hs, references = self.decoder(tgt, memory, memory_key_padding_mask=mask,
-                          pos=pos_embed, query_pos=query_embed, box_embed=src_box_embed)
+                                        pos=pos_embed, query_pos=query_embed, box_embed=src_box_embed)
         # return hs.transpose(1, 2), memory.permute(1, 2, 0).view(bs, c, h, w)
         return hs.transpose(1, 2), references
 
@@ -162,10 +258,29 @@ class TransformerDecoder(nn.Module):
         self.layers[0].ca_kpos_proj = None
         self.layers[0].ca_qcontent_proj = None
         
-        self.ref_point_heads = nn.ModuleList(nn.Conv2d(d_model, 4, kernel_size=1) for i in range(num_layers-1))
+        # ref points
+        self.ref_point_maps = nn.ModuleList(nn.Conv2d(d_model, d_model, kernel_size=1) for i in range(num_layers-1))
+        self.ref_point_head = nn.Linear(d_model, 4)
         
-        self.map_add_out = nn.ModuleList(MLP(d_model, d_model, d_model, 2) for i in range(num_layers-1))
-        self.map_add_norm = nn.LayerNorm(d_model)
+        self.update_gate = UpdateGate(
+            d_model=d_model,
+            num_layers=num_layers,
+            gate_type="adaptive",
+            use_highway=True
+        )
+
+        # # 增强残差连接
+        self.residual_adapters = nn.ModuleList([
+            nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Linear(d_model, d_model * 2),
+                nn.GELU(),
+                nn.Linear(d_model * 2, d_model)
+            ) for _ in range(num_layers - 1)
+        ])
+        
+        # 门控机制
+        self.gating_factors = nn.Parameter(torch.zeros(num_layers - 1))
 
     def forward(self, tgt, memory,
                 tgt_mask: Optional[Tensor] = None,
@@ -182,7 +297,8 @@ class TransformerDecoder(nn.Module):
         reference_points_lvl=[]
         # reference points
         reference_points_before_sigmoid = self.ref_point_head(query_pos)    # [num_queries, batch_size, 2]
-        # reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
+
+        prev_gate = None  # 保存前一层门控值用于稳定性
 
         for layer_id, layer in enumerate(self.layers):
             # obj_center = reference_points[..., :].transpose(0, 1)
@@ -192,14 +308,30 @@ class TransformerDecoder(nn.Module):
                 pos_transformation = 1
                 box_off = 0
                 out_res = 0
+                gate_res = 0
             else:
                 pos_transformation = self.query_scale(output)
-                box_off = self.ref_point_heads[layer_id-1](box_embed).flatten(2).permute(2, 0, 1)
-                out_res = self.map_add_out[layer_id-1](output)
+                box_off_embed = self.ref_point_maps[layer_id-1](box_embed).flatten(2).permute(2, 0, 1)
+                box_off = self.ref_point_head(box_off_embed)
+                
+                # 残差适配器（特征变换）
+                out_res = self.residual_adapters[layer_id-1](output)
+                # 门控机制
+                gate_res = torch.sigmoid(self.gating_factors[layer_id-1])
+                
+                # 门控 更新参考点
+                reference_points_before_sigmoid_new = (reference_points_before_sigmoid + box_off)
+                gate_value, highway_weight = self.update_gate(layer_id, output, box_off_embed, prev_gate)
+                prev_gate = gate_value.detach()  # 保存当前门控值
+                # 应用门控
+                updated_ref = gate_value * reference_points_before_sigmoid_new + (1 - gate_value) * reference_points_before_sigmoid
+                # 高速连接
+                if highway_weight is not None:
+                    reference_points_before_sigmoid = highway_weight * updated_ref + (1 - highway_weight) * reference_points_before_sigmoid
+                else:
+                    reference_points_before_sigmoid = updated_ref
             
-            reference_points_before_sigmoid_new = (reference_points_before_sigmoid + box_off)
-            reference_points = reference_points_before_sigmoid_new.sigmoid().transpose(0, 1)
-            # reference_points = reference_points_new.detach()
+            reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
             obj_center = reference_points[..., :].transpose(0, 1)
 
             # # get sine embedding for the query vector
@@ -211,15 +343,13 @@ class TransformerDecoder(nn.Module):
             
             # do layer compute
             output_new, _ = layer(output, memory, tgt_mask=tgt_mask,
-                           memory_mask=memory_mask,
-                           tgt_key_padding_mask=tgt_key_padding_mask,
-                           memory_key_padding_mask=memory_key_padding_mask,
-                           pos=pos, query_pos=query_pos, query_sine_embed=query_sine_embed,
-                           is_first=(layer_id == 0))
+                                    memory_mask=memory_mask,
+                                    tgt_key_padding_mask=tgt_key_padding_mask,
+                                    memory_key_padding_mask=memory_key_padding_mask,
+                                    pos=pos, query_pos=query_pos, query_sine_embed=query_sine_embed,
+                                    is_first=(layer_id == 0))
              
-            output = self.map_add_norm(out_res + output_new)
-
-            # reference_points_before_sigmoid = reference_points_before_sigmoid_new
+            output = out_res*gate_res + output_new
 
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
@@ -250,9 +380,10 @@ class TransformerDecoderLayer(nn.Module):
         # self.multihead_attn = nn.MultiheadAttention(d_model*2, nhead, dropout=dropout)
         
         # Implementation of Feedforward model
-        self.linear1 = nn.Linear(d_model, dim_feedforward//2)
+        head_dim = dim_feedforward//2
+        self.linear1 = nn.Linear(d_model, head_dim)
         self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(dim_feedforward//2, d_model)
+        self.linear2 = nn.Linear(head_dim, d_model)
 
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
@@ -283,9 +414,9 @@ class TransformerDecoderLayer(nn.Module):
         self.dropout_pos2 = nn.Dropout(dropout)
         self.dropout_pos3 = nn.Dropout(dropout)
         
-        self.linear_pos1 = nn.Linear(d_model, dim_feedforward//2)
+        self.linear_pos1 = nn.Linear(d_model, head_dim)
         self.dropout_pos = nn.Dropout(dropout)
-        self.linear_pos2 = nn.Linear(dim_feedforward//2, d_model)
+        self.linear_pos2 = nn.Linear(head_dim, d_model)
         
         self.norm_add = nn.LayerNorm(d_model)
         
