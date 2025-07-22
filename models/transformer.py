@@ -49,7 +49,6 @@ def gen_sineembed_for_position(pos_tensor):
     pos = torch.cat((pos_y, pos_x), dim=2)
     return pos
 
-
 def gen_sineembed_for_position4(pos_tensor):
     # n_query, bs, _ = pos_tensor.size()
     # sineembed_tensor = torch.zeros(n_query, bs, 256)
@@ -213,8 +212,6 @@ class Transformer(nn.Module):
         self.num_dec_layers = num_decoder_layers
         self.num_queries = num_queries
 
-        self.norm_mem = nn.LayerNorm(d_model)
-
     def _reset_parameters(self):
         for p in self.parameters():
             if p.dim() > 1:
@@ -230,7 +227,6 @@ class Transformer(nn.Module):
         
         tgt = torch.zeros_like(query_embed)
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
-        memory = self.norm_mem(memory+src)
         
         hs, references = self.decoder(tgt, memory, memory_key_padding_mask=mask,
                                         pos=pos_embed, query_pos=query_embed, box_embed=src_box_embed)
@@ -269,19 +265,6 @@ class TransformerDecoder(nn.Module):
             use_highway=True
         )
 
-        # # 增强残差连接
-        self.residual_adapters = nn.ModuleList([
-            nn.Sequential(
-                nn.LayerNorm(d_model),
-                nn.Linear(d_model, d_model * 2),
-                nn.GELU(),
-                nn.Linear(d_model * 2, d_model)
-            ) for _ in range(num_layers - 1)
-        ])
-        
-        # 门控机制
-        self.gating_factors = nn.Parameter(torch.zeros(num_layers - 1))
-
     def forward(self, tgt, memory,
                 tgt_mask: Optional[Tensor] = None,
                 memory_mask: Optional[Tensor] = None,
@@ -307,17 +290,10 @@ class TransformerDecoder(nn.Module):
             if layer_id == 0:
                 pos_transformation = 1
                 box_off = 0
-                out_res = 0
-                gate_res = 0
             else:
                 pos_transformation = self.query_scale(output)
                 box_off_embed = self.ref_point_maps[layer_id-1](box_embed).flatten(2).permute(2, 0, 1)
                 box_off = self.ref_point_head(box_off_embed)
-                
-                # 残差适配器（特征变换）
-                out_res = self.residual_adapters[layer_id-1](output)
-                # 门控机制
-                gate_res = torch.sigmoid(self.gating_factors[layer_id-1])
                 
                 # 门控 更新参考点
                 reference_points_before_sigmoid_new = (reference_points_before_sigmoid + box_off)
@@ -339,18 +315,20 @@ class TransformerDecoder(nn.Module):
             # # apply transformation
             # query_sine_embed = query_sine_embed * pos_transformation
 
+            log_wh = obj_center[..., 2:] + 1e-8
+            obj_center = torch.cat([obj_center[..., :2], torch.log(log_wh)], dim=-1)
             query_sine_embed = gen_sineembed_for_position4(obj_center) * pos_transformation
-            
+            # obj_center = obj_center[..., :2]
+            # query_sine_embed = gen_sineembed_for_position(obj_center) * pos_transformation
+
             # do layer compute
-            output_new, _ = layer(output, memory, tgt_mask=tgt_mask,
+            output, _ = layer(output, memory, tgt_mask=tgt_mask,
                                     memory_mask=memory_mask,
                                     tgt_key_padding_mask=tgt_key_padding_mask,
                                     memory_key_padding_mask=memory_key_padding_mask,
                                     pos=pos, query_pos=query_pos, query_sine_embed=query_sine_embed,
                                     is_first=(layer_id == 0))
              
-            output = out_res*gate_res + output_new
-
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
                 reference_points_lvl.append(reference_points)

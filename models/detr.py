@@ -101,11 +101,16 @@ class DETR(nn.Module):
             # tmp = self.bbox_embed(hs[lvl])
             # tmp[..., :2] += reference_before_sigmoid
 
+            # tmp = self.bbox_embed(self.bbox_hs_map[lvl](hs[lvl]))
             tmp = self.bbox_embed[lvl](hs[lvl])
             tmp += reference_before_sigmoid[lvl]
             
-            # tmp[..., :2] += reference_before_sigmoid[..., :2]
-            # tmp[..., 2:] *= reference_before_sigmoid[..., 2:]
+            # tmp[..., :2] += reference_before_sigmoid[lvl][..., :2]
+            # tmp[..., 2:] *= reference_before_sigmoid[lvl][..., 2:]
+            
+            # tmp[..., :2] += reference_before_sigmoid[lvl][..., :2]
+            # tmp_wh = reference_before_sigmoid[lvl][..., [2,3]] - reference_before_sigmoid[lvl][..., [0,1]]
+            # tmp[..., 2:] += tmp_wh
             
             outputs_coord = tmp.sigmoid()
             outputs_coords.append(outputs_coord) 
