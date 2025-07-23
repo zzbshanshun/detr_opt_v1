@@ -53,10 +53,12 @@ def gen_sineembed_for_position4(pos_tensor):
     # n_query, bs, _ = pos_tensor.size()
     # sineembed_tensor = torch.zeros(n_query, bs, 256)
     
-    dim = 64
+    # 4输入的编码，编码长度由128下降到64，导致低频信息丢失较多，缺少全局感知，尝试将1～64变为1～128（间隔为2）
+    fdim = 128
     scale = 2 * math.pi
-    dim_t = torch.arange(dim, dtype=torch.float32, device=pos_tensor.device)
-    dim_t = 10000 ** (2 * (dim_t // 2) / dim)
+    dim_t = torch.arange(0, fdim, 2, dtype=torch.float32, device=pos_tensor.device) 
+    dim_t = 10000 ** (2 * (dim_t // 2) / fdim)
+    # pdb.set_trace()
     x_embed = pos_tensor[:, :, 0] * scale
     y_embed = pos_tensor[:, :, 1] * scale
     w_embed = pos_tensor[:, :, 2] * scale
@@ -308,18 +310,21 @@ class TransformerDecoder(nn.Module):
                     reference_points_before_sigmoid = updated_ref
             
             reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
-            obj_center = reference_points[..., :].transpose(0, 1)
+            obj_box = reference_points[..., :].transpose(0, 1)
 
             # # get sine embedding for the query vector
             # query_sine_embed = gen_sineembed_for_position(obj_center)
             # # apply transformation
             # query_sine_embed = query_sine_embed * pos_transformation
 
-            log_wh = obj_center[..., 2:] + 1e-8
-            obj_center = torch.cat([obj_center[..., :2], torch.log(log_wh)], dim=-1)
-            query_sine_embed = gen_sineembed_for_position4(obj_center) * pos_transformation
-            # obj_center = obj_center[..., :2]
-            # query_sine_embed = gen_sineembed_for_position(obj_center) * pos_transformation
+            obj_box_wh = torch.log(obj_box[..., 2:] + 1e-8)
+            obj_box_cen = obj_box[..., :2]
+            # obj_center = torch.cat([obj_box_cen, obj_box_wh], dim=-1)
+            # query_sine_embed = gen_sineembed_for_position4(obj_center) * pos_transformation
+            
+            query_sine_embed = gen_sineembed_for_position(obj_box_cen) * pos_transformation
+            # query_sine_embed_wh = gen_sineembed_for_position(obj_box_wh)
+            # query_sine_embed = (query_sine_embed_cen + query_sine_embed_wh) * pos_transformation
 
             # do layer compute
             output, _ = layer(output, memory, tgt_mask=tgt_mask,
