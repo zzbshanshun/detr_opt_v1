@@ -49,16 +49,16 @@ def gen_sineembed_for_position(pos_tensor):
     pos = torch.cat((pos_y, pos_x), dim=2)
     return pos
 
-def gen_sineembed_for_position4(pos_tensor):
+def gen_sineembed_for_xywh(pos_tensor):
     # n_query, bs, _ = pos_tensor.size()
     # sineembed_tensor = torch.zeros(n_query, bs, 256)
     
-    # 4输入的编码，编码长度由128下降到64，导致低频信息丢失较多，缺少全局感知，尝试将1～64变为1～128（间隔为2）
-    fdim = 128
+    # 4输入的编码，编码长度由128下降到64，导致低频信息丢失较多，缺少全局感知;
+    # 尝试将1～64变为1～128（间隔为2），效果一般
+    fdim = 64
     scale = 2 * math.pi
-    dim_t = torch.arange(0, fdim, 2, dtype=torch.float32, device=pos_tensor.device) 
+    dim_t = torch.arange(0, fdim, 1, dtype=torch.float32, device=pos_tensor.device) 
     dim_t = 10000 ** (2 * (dim_t // 2) / fdim)
-    # pdb.set_trace()
     x_embed = pos_tensor[:, :, 0] * scale
     y_embed = pos_tensor[:, :, 1] * scale
     w_embed = pos_tensor[:, :, 2] * scale
@@ -69,24 +69,9 @@ def gen_sineembed_for_position4(pos_tensor):
     pos_h = h_embed[:, :, None] / dim_t
     pos_x = torch.stack((pos_x[:, :, 0::2].sin(), pos_x[:, :, 1::2].cos()), dim=3).flatten(2)
     pos_y = torch.stack((pos_y[:, :, 0::2].sin(), pos_y[:, :, 1::2].cos()), dim=3).flatten(2)
-    pos_w = torch.stack((pos_x[:, :, 0::2].sin(), pos_x[:, :, 1::2].cos()), dim=3).flatten(2)
-    pos_h = torch.stack((pos_y[:, :, 0::2].sin(), pos_y[:, :, 1::2].cos()), dim=3).flatten(2)
+    pos_w = torch.stack((pos_w[:, :, 0::2].sin(), pos_w[:, :, 1::2].cos()), dim=3).flatten(2)
+    pos_h = torch.stack((pos_h[:, :, 0::2].sin(), pos_h[:, :, 1::2].cos()), dim=3).flatten(2)
     pos = torch.cat((pos_y, pos_x, pos_w, pos_h), dim=2)
-    return pos
-
-def gen_sineembed_for_position2(pos_tensor):
-    # n_query, bs, _ = pos_tensor.size()
-    # sineembed_tensor = torch.zeros(n_query, bs, 256)
-    scale = 2 * math.pi
-    dim_t = torch.arange(64, dtype=torch.float32, device=pos_tensor.device)
-    dim_t = 10000 ** (2 * (dim_t // 2) / 64)
-    x_embed = pos_tensor[:, :, 0] * scale
-    y_embed = pos_tensor[:, :, 1] * scale
-    pos_x = x_embed[:, :, None] / dim_t
-    pos_y = y_embed[:, :, None] / dim_t
-    pos_x = torch.stack((pos_x[:, :, 0::2].sin(), pos_x[:, :, 1::2].cos()), dim=3).flatten(2)
-    pos_y = torch.stack((pos_y[:, :, 0::2].sin(), pos_y[:, :, 1::2].cos()), dim=3).flatten(2)
-    pos = torch.cat((pos_y, pos_x), dim=2)
     return pos
 
 class UpdateGate(nn.Module):
@@ -245,7 +230,16 @@ class TransformerDecoder(nn.Module):
         self.norm = norm
         self.return_intermediate = return_intermediate
         
-        self.query_scale = MLP(d_model, d_model, d_model, 2)
+        # self.query_scale = MLP(d_model, d_model, d_model, 2)
+        
+        self.query_scale_x = MLP(d_model+d_model//2, d_model, d_model//2, 2)
+        self.query_scale_y = MLP(d_model+d_model//2, d_model, d_model//2, 2)
+        self.wh_sine_proj_x = nn.Linear(d_model//2, d_model//2)
+        self.wh_sine_proj_y = nn.Linear(d_model//2, d_model//2)
+        
+        # self.query_scale_xy = MLP(d_model*2, d_model, d_model, 2)
+        # self.wh_sine_proj = nn.Linear(d_model, d_model)
+        
         self.ref_point_head = MLP(d_model, d_model, 4, 2)
         for layer_id in range(num_layers - 1):
             self.layers[layer_id + 1].ca_qpos_proj = None
@@ -259,7 +253,7 @@ class TransformerDecoder(nn.Module):
         # ref points
         self.ref_point_maps = nn.ModuleList(nn.Conv2d(d_model, d_model, kernel_size=1) for i in range(num_layers-1))
         self.ref_point_head = nn.Linear(d_model, 4)
-        
+                
         self.update_gate = UpdateGate(
             d_model=d_model,
             num_layers=num_layers,
@@ -276,7 +270,6 @@ class TransformerDecoder(nn.Module):
                 query_pos: Optional[Tensor] = None,
                 box_embed: Optional[Tensor] = None):
         output = tgt
-        # output_pos = tgt
 
         intermediate = []
         reference_points_lvl=[]
@@ -290,10 +283,10 @@ class TransformerDecoder(nn.Module):
 
             # For the first decoder layer, we do not apply transformation over p_s
             if layer_id == 0:
-                pos_transformation = 1
+                # pos_transformation = 1
                 box_off = 0
             else:
-                pos_transformation = self.query_scale(output)
+                # pos_transformation = self.query_scale(output)
                 box_off_embed = self.ref_point_maps[layer_id-1](box_embed).flatten(2).permute(2, 0, 1)
                 box_off = self.ref_point_head(box_off_embed)
                 
@@ -308,24 +301,27 @@ class TransformerDecoder(nn.Module):
                     reference_points_before_sigmoid = highway_weight * updated_ref + (1 - highway_weight) * reference_points_before_sigmoid
                 else:
                     reference_points_before_sigmoid = updated_ref
-            
+                                
             reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
             obj_box = reference_points[..., :].transpose(0, 1)
 
-            # # get sine embedding for the query vector
-            # query_sine_embed = gen_sineembed_for_position(obj_center)
-            # # apply transformation
-            # query_sine_embed = query_sine_embed * pos_transformation
-
-            obj_box_wh = torch.log(obj_box[..., 2:] + 1e-8)
-            obj_box_cen = obj_box[..., :2]
-            # obj_center = torch.cat([obj_box_cen, obj_box_wh], dim=-1)
-            # query_sine_embed = gen_sineembed_for_position4(obj_center) * pos_transformation
+            # obj_box_wh = torch.log(obj_box[..., 2:] + 1e-8)
+            # obj_box_cen = obj_box[..., :2]
+            # query_sine_embed = gen_sineembed_for_position(obj_box) * pos_transformation
             
-            query_sine_embed = gen_sineembed_for_position(obj_box_cen) * pos_transformation
-            # query_sine_embed_wh = gen_sineembed_for_position(obj_box_wh)
-            # query_sine_embed = (query_sine_embed_cen + query_sine_embed_wh) * pos_transformation
+            if layer_id != 0:
+                sin_wh = gen_sineembed_for_position(obj_box[..., 2:])
+                pos_transformation_x = self.query_scale_x(torch.cat([output, self.wh_sine_proj_x(sin_wh[..., 128:])], dim=-1))
+                pos_transformation_y = self.query_scale_y(torch.cat([output, self.wh_sine_proj_y(sin_wh[..., :128])], dim=-1))
+                pos_transformation = torch.cat([pos_transformation_x, pos_transformation_y], dim=-1)
 
+                # sin_wh = self.wh_sine_proj(sin_wh)
+                # pos_transformation = self.query_scale_xy(torch.cat([output, sin_wh], dim=-1))
+            else:
+                pos_transformation = 1
+                
+            query_sine_embed = gen_sineembed_for_position(obj_box[..., :2])*pos_transformation
+            
             # do layer compute
             output, _ = layer(output, memory, tgt_mask=tgt_mask,
                                     memory_mask=memory_mask,
