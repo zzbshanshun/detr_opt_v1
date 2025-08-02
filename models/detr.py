@@ -113,7 +113,7 @@ class DETR(nn.Module):
             # tmp[..., 2:] += tmp_wh
             
             outputs_coord = tmp.sigmoid()
-            outputs_coords.append(outputs_coord) 
+            outputs_coords.append(outputs_coord)
         outputs_coord = torch.stack(outputs_coords)
         #########
         outputs_class = self.class_embed(hs)

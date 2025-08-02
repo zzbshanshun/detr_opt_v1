@@ -232,13 +232,12 @@ class TransformerDecoder(nn.Module):
         
         # self.query_scale = MLP(d_model, d_model, d_model, 2)
         
-        self.query_scale_x = MLP(d_model+d_model//2, d_model, d_model//2, 2)
-        self.query_scale_y = MLP(d_model+d_model//2, d_model, d_model//2, 2)
-        self.wh_sine_proj_x = nn.Linear(d_model//2, d_model//2)
-        self.wh_sine_proj_y = nn.Linear(d_model//2, d_model//2)
-        
-        # self.query_scale_xy = MLP(d_model*2, d_model, d_model, 2)
-        # self.wh_sine_proj = nn.Linear(d_model, d_model)
+        self.query_scale_x = MLP(d_model, d_model, d_model//2, 2)
+        self.query_scale_y = MLP(d_model, d_model, d_model//2, 2)
+        # self.wh_sine_proj_x = nn.Linear(d_model//2, d_model//2)
+        # self.wh_sine_proj_y = nn.Linear(d_model//2, d_model//2)
+
+        self.out_proj = nn.Linear(d_model, d_model//2)
         
         self.ref_point_head = MLP(d_model, d_model, 4, 2)
         for layer_id in range(num_layers - 1):
@@ -258,7 +257,7 @@ class TransformerDecoder(nn.Module):
             d_model=d_model,
             num_layers=num_layers,
             gate_type="adaptive",
-            use_highway=True
+            use_highway=False
         )
 
     def forward(self, tgt, memory,
@@ -283,26 +282,27 @@ class TransformerDecoder(nn.Module):
 
             # For the first decoder layer, we do not apply transformation over p_s
             if layer_id == 0:
-                # pos_transformation = 1
+                pos_transformation = 1
                 box_off = 0
+                reference_points_before_sigmoid_new = reference_points_before_sigmoid
             else:
                 # pos_transformation = self.query_scale(output)
                 box_off_embed = self.ref_point_maps[layer_id-1](box_embed).flatten(2).permute(2, 0, 1)
                 box_off = self.ref_point_head(box_off_embed)
                 
                 # 门控 更新参考点
-                reference_points_before_sigmoid_new = (reference_points_before_sigmoid + box_off)
+                # reference_points_before_sigmoid_new = (reference_points_before_sigmoid + box_off)
                 gate_value, highway_weight = self.update_gate(layer_id, output, box_off_embed, prev_gate)
                 prev_gate = gate_value.detach()  # 保存当前门控值
                 # 应用门控
-                updated_ref = gate_value * reference_points_before_sigmoid_new + (1 - gate_value) * reference_points_before_sigmoid
+                updated_ref = gate_value * box_off + reference_points_before_sigmoid
                 # 高速连接
                 if highway_weight is not None:
-                    reference_points_before_sigmoid = highway_weight * updated_ref + (1 - highway_weight) * reference_points_before_sigmoid
+                    reference_points_before_sigmoid_new = highway_weight * updated_ref + (1 - highway_weight) * reference_points_before_sigmoid
                 else:
-                    reference_points_before_sigmoid = updated_ref
+                    reference_points_before_sigmoid_new = updated_ref
                                 
-            reference_points = reference_points_before_sigmoid.sigmoid().transpose(0, 1)
+            reference_points = reference_points_before_sigmoid_new.sigmoid().transpose(0, 1)
             obj_box = reference_points[..., :].transpose(0, 1)
 
             # obj_box_wh = torch.log(obj_box[..., 2:] + 1e-8)
@@ -310,15 +310,17 @@ class TransformerDecoder(nn.Module):
             # query_sine_embed = gen_sineembed_for_position(obj_box) * pos_transformation
             
             if layer_id != 0:
-                sin_wh = gen_sineembed_for_position(obj_box[..., 2:])
-                pos_transformation_x = self.query_scale_x(torch.cat([output, self.wh_sine_proj_x(sin_wh[..., 128:])], dim=-1))
-                pos_transformation_y = self.query_scale_y(torch.cat([output, self.wh_sine_proj_y(sin_wh[..., :128])], dim=-1))
+                sin_wh = gen_sineembed_for_position(torch.log(obj_box[..., 2:] + 1e-8))
+                # pos_transformation_x = self.query_scale_x(torch.cat([output, self.wh_sine_proj_x(sin_wh[..., 128:])], dim=-1))
+                # pos_transformation_y = self.query_scale_y(torch.cat([output, self.wh_sine_proj_y(sin_wh[..., :128])], dim=-1))
+
+                output_half = self.out_proj(output)
+                pos_transformation_x = self.query_scale_x(torch.cat([output_half, sin_wh[..., 128:]], dim=-1))
+                pos_transformation_y = self.query_scale_y(torch.cat([output_half, sin_wh[..., :128]], dim=-1))
                 pos_transformation = torch.cat([pos_transformation_x, pos_transformation_y], dim=-1)
 
                 # sin_wh = self.wh_sine_proj(sin_wh)
                 # pos_transformation = self.query_scale_xy(torch.cat([output, sin_wh], dim=-1))
-            else:
-                pos_transformation = 1
                 
             query_sine_embed = gen_sineembed_for_position(obj_box[..., :2])*pos_transformation
             
