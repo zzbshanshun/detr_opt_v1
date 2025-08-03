@@ -239,7 +239,7 @@ class TransformerDecoder(nn.Module):
 
         self.out_proj = nn.Linear(d_model, d_model//2)
         
-        self.ref_point_head = MLP(d_model, d_model, 4, 2)
+        # self.qref_point_head = MLP(d_model, d_model, 4, 2) # 不使用效果好
         for layer_id in range(num_layers - 1):
             self.layers[layer_id + 1].ca_qpos_proj = None
         
@@ -251,7 +251,13 @@ class TransformerDecoder(nn.Module):
         
         # ref points
         self.ref_point_maps = nn.ModuleList(nn.Conv2d(d_model, d_model, kernel_size=1) for i in range(num_layers-1))
-        self.ref_point_head = nn.Linear(d_model, 4)
+        self.ref_point_head = nn.Linear(d_model, 4) # box 使用同一个
+
+        # self.ref_point_head = nn.Sequential(
+        #                         nn.Linear(d_model, 4),
+        #                         nn.ReLU(),
+        #                         # nn.Linear(d_model, 4)
+        #                     )
                 
         self.update_gate = UpdateGate(
             d_model=d_model,
@@ -287,7 +293,8 @@ class TransformerDecoder(nn.Module):
                 reference_points_before_sigmoid_new = reference_points_before_sigmoid
             else:
                 # pos_transformation = self.query_scale(output)
-                box_off_embed = self.ref_point_maps[layer_id-1](box_embed).flatten(2).permute(2, 0, 1)
+                box_embed = self.ref_point_maps[layer_id-1](box_embed)
+                box_off_embed = box_embed.flatten(2).permute(2, 0, 1)
                 box_off = self.ref_point_head(box_off_embed)
                 
                 # 门控 更新参考点
