@@ -238,6 +238,8 @@ class TransformerDecoder(nn.Module):
         # self.wh_sine_proj_y = nn.Linear(d_model//2, d_model//2)
 
         self.out_proj = nn.Linear(d_model, d_model//2)
+
+        # self.norm_scale = nn.LayerNorm(d_model)
         
         # self.qref_point_head = MLP(d_model, d_model, 4, 2) # 不使用效果好
         for layer_id in range(num_layers - 1):
@@ -252,12 +254,6 @@ class TransformerDecoder(nn.Module):
         # ref points
         self.ref_point_maps = nn.ModuleList(nn.Conv2d(d_model, d_model, kernel_size=1) for i in range(num_layers-1))
         self.ref_point_head = nn.Linear(d_model, 4) # box 使用同一个
-
-        # self.ref_point_head = nn.Sequential(
-        #                         nn.Linear(d_model, 4),
-        #                         nn.ReLU(),
-        #                         # nn.Linear(d_model, 4)
-        #                     )
                 
         self.update_gate = UpdateGate(
             d_model=d_model,
@@ -293,7 +289,7 @@ class TransformerDecoder(nn.Module):
                 reference_points_before_sigmoid_new = reference_points_before_sigmoid
             else:
                 # pos_transformation = self.query_scale(output)
-                box_embed = self.ref_point_maps[layer_id-1](box_embed)
+                box_embed = box_embed + self.ref_point_maps[layer_id-1](box_embed)
                 box_off_embed = box_embed.flatten(2).permute(2, 0, 1)
                 box_off = self.ref_point_head(box_off_embed)
                 
@@ -325,9 +321,6 @@ class TransformerDecoder(nn.Module):
                 pos_transformation_x = self.query_scale_x(torch.cat([output_half, sin_wh[..., 128:]], dim=-1))
                 pos_transformation_y = self.query_scale_y(torch.cat([output_half, sin_wh[..., :128]], dim=-1))
                 pos_transformation = torch.cat([pos_transformation_x, pos_transformation_y], dim=-1)
-
-                # sin_wh = self.wh_sine_proj(sin_wh)
-                # pos_transformation = self.query_scale_xy(torch.cat([output, sin_wh], dim=-1))
                 
             query_sine_embed = gen_sineembed_for_position(obj_box[..., :2])*pos_transformation
             
