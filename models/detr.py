@@ -60,9 +60,9 @@ class DETR(nn.Module):
             nn.init.constant_(bbox_embed.layers[-1].bias.data, 0)
 
         # generte query pos from src
-        shape = 18
-        self.query_pos_box = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
-        self.avg_pool = nn.AdaptiveAvgPool2d(shape)
+        # shape = 17
+        # self.query_pos_box = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
+        # self.avg_pool = nn.AdaptiveAvgPool2d(shape)
         # self.max_pool = nn.AdaptiveMaxPool2d(shape)
 
     def forward(self, samples: NestedTensor):
@@ -89,8 +89,9 @@ class DETR(nn.Module):
         # hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
         # outputs_coord = self.bbox_embed(hs).sigmoid()
 
-        src_base = self.query_pos_box(src)
-        src_qpos = self.avg_pool(src_base)
+        # src_base = self.query_pos_box(src)
+        # src_qpos = self.avg_pool(src_base)
+        src_qpos = None
         
         # test 
         hs, reference = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1], src_qpos)[0:2]
