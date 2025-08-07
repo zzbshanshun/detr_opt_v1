@@ -201,8 +201,8 @@ class Transformer(nn.Module):
         
         self.src_qpos_ref = nn.Conv2d(d_model, d_model, kernel_size=1)
         shape = 18
-        # self.ref_ac_pool = nn.AdaptiveAvgPool2d(shape)
-        self.ref_ac_pool = nn.AdaptiveMaxPool2d(shape)
+        self.ref_ac_pool = nn.AdaptiveAvgPool2d(shape)
+        # self.ref_ac_pool = nn.AdaptiveMaxPool2d(shape)
 
     def _reset_parameters(self):
         for p in self.parameters():
