@@ -16,8 +16,9 @@ import util.misc as utils
 from datasets import build_dataset, get_coco_api_from_dataset
 from engine import evaluate, train_one_epoch
 from models import build_model
+from models import build_DABDETR
 
-
+#'''
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
     parser.add_argument('--lr', default=1.1e-4, type=float)
@@ -51,7 +52,7 @@ def get_args_parser():
                         help="Intermediate size of the feedforward layers in the transformer blocks")
     parser.add_argument('--hidden_dim', default=256, type=int,
                         help="Size of the embeddings (dimension of the transformer)")
-    parser.add_argument('--dropout', default=0.1, type=float,
+    parser.add_argument('--dropout', default=0.0, type=float,
                         help="Dropout applied in the transformer")
     parser.add_argument('--nheads', default=8, type=int,
                         help="Number of attention heads inside the transformer's attentions")
@@ -67,7 +68,7 @@ def get_args_parser():
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
                         help="Disables auxiliary decoding losses (loss at each layer)")
     # * Matcher
-    parser.add_argument('--set_cost_class', default=1, type=float,
+    parser.add_argument('--set_cost_class', default=2, type=float,
                         help="Class coefficient in the matching cost")
     parser.add_argument('--set_cost_bbox', default=5, type=float,
                         help="L1 box coefficient in the matching cost")
@@ -80,7 +81,7 @@ def get_args_parser():
     parser.add_argument('--giou_loss_coef', default=2, type=float) #2
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
-    parser.add_argument('--cls_loss_coef', default=2, type=float) # 2
+    parser.add_argument('--cls_loss_coef', default=1, type=float) # 2
     parser.add_argument('--focal_alpha', default=0.25, type=float)
 
     # dataset parameters
@@ -104,7 +105,17 @@ def get_args_parser():
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
+    
+    parser.add_argument('--rank', default=0, type=int,
+                        help='number of distributed processes')
+                        
+    parser.add_argument('--return_interm_layers', action='store_true',
+                        help="Train segmentation head if the flag is provided")
+    parser.add_argument('--amp', action='store_true',
+                        help="Train with mixed precision")
+    
     return parser
+#'''
 
 
 def main(args):
@@ -124,6 +135,7 @@ def main(args):
     random.seed(seed)
 
     model, criterion, postprocessors = build_model(args)
+    # model, criterion, postprocessors = build_DABDETR(args)
     model.to(device)
 
     model_without_ddp = model
@@ -253,6 +265,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
+    
     args = parser.parse_args()
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)

@@ -331,8 +331,6 @@ class TransformerDecoder(nn.Module):
             # For the first decoder layer, we do not apply transformation over p_s
             if layer_id == 0:
                 pos_transformation = 1
-                # box_off = 0
-                # reference_points_unsigmoid_new = reference_points_unsigmoid
             else:
                 # pos_transformation = self.query_scale(output)
                 # box_embed = self.ref_point_maps[layer_id-1](box_embed)

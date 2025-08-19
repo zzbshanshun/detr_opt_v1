@@ -30,6 +30,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     
     iter_count = 0
     vir_batch = 2
+    use_amp = True
+    
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
     
     optimizer.zero_grad()
     local_rank = os.environ['LOCAL_RANK'] 
@@ -37,7 +40,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        ''' org code
+
+        #''' org code
+        # with torch.cuda.amp.autocast(use_amp):
         outputs = model(samples)
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
@@ -59,17 +64,28 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             sys.exit(1)
             
         optimizer.zero_grad()
-        losses.backward()
-        if max_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
-        optimizer.step()
+        # amp backward function
+        if use_amp:
+            # optimizer.zero_grad()
+            scaler.scale(losses).backward()
+            if max_norm > 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            # original backward function
+            losses.backward()
+            if max_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+            optimizer.step()
 
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        '''
-    
         #'''
+    
+        '''
         iter_count = iter_count+1
         my_context = model.no_sync if local_rank != -1 and iter_count % vir_batch != 0 else nullcontext
         
@@ -107,7 +123,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
             metric_logger.update(class_error=loss_dict_reduced['class_error'])
             metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-    #'''
+            '''
         
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -127,6 +143,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
     coco_evaluator = CocoEvaluator(base_ds, iou_types)
     # coco_evaluator.coco_eval[iou_types[0]].params.iouThrs = [0, 0.1, 0.5, 0.75]
 
+    use_amp = False
+
     panoptic_evaluator = None
     if 'panoptic' in postprocessors.keys():
         panoptic_evaluator = PanopticEvaluator(
@@ -138,7 +156,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
     for samples, targets in metric_logger.log_every(data_loader, 200, header):
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
+        
+        # with torch.cuda.amp.autocast(use_amp):
         outputs = model(samples)
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict

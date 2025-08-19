@@ -39,9 +39,9 @@ class DETR(nn.Module):
         self.transformer = transformer
         hidden_dim = transformer.d_model
         self.class_embed = nn.Linear(hidden_dim, num_classes )
-        # self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
-        self.bbox_embed = nn.ModuleList([MLP(hidden_dim, hidden_dim, 4, 2) for i in range(transformer.num_dec_layers)])
-        self.query_embed = nn.Embedding(num_queries, hidden_dim)
+        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
+        # self.bbox_embed = nn.ModuleList([MLP(hidden_dim, hidden_dim, 4, 2) for i in range(transformer.num_dec_layers)])
+        # self.query_embed = nn.Embedding(num_queries, hidden_dim)
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
@@ -52,18 +52,23 @@ class DETR(nn.Module):
         self.class_embed.bias.data = torch.ones(num_classes) * bias_value
 
         # init bbox_mebed
-        # nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
-        # nn.init.constant_(self.bbox_embed.layers[-1].bias.data, 0)
-        
-        for bbox_embed in self.bbox_embed:
-            nn.init.constant_(bbox_embed.layers[-1].weight.data, 0)
-            nn.init.constant_(bbox_embed.layers[-1].bias.data, 0)
+        nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
+        nn.init.constant_(self.bbox_embed.layers[-1].bias.data, 0)
 
-        # generte query pos from src
-        # shape = 17
-        # self.query_pos_box = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
-        # self.avg_pool = nn.AdaptiveAvgPool2d(shape)
-        # self.max_pool = nn.AdaptiveMaxPool2d(shape)
+        self.transformer.decoder.out_proj = self.bbox_embed
+        
+        # for bbox_embed in self.bbox_embed:
+        #     nn.init.constant_(bbox_embed.layers[-1].weight.data, 0)
+        #     nn.init.constant_(bbox_embed.layers[-1].bias.data, 0)
+            
+        random_refpoints_xy = True
+        self.refpoint_embed = nn.Embedding(num_queries, 4)
+        self.random_refpoints_xy = random_refpoints_xy
+        if random_refpoints_xy:
+            # import ipdb; ipdb.set_trace()
+            self.refpoint_embed.weight.data[:, :2].uniform_(0,1)
+            self.refpoint_embed.weight.data[:, :2] = inverse_sigmoid(self.refpoint_embed.weight.data[:, :2])
+            self.refpoint_embed.weight.data[:, :2].requires_grad = False
 
     def forward(self, samples: NestedTensor):
         """ The forward expects a NestedTensor, which consists of:
@@ -88,22 +93,18 @@ class DETR(nn.Module):
         assert mask is not None
         # hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
         # outputs_coord = self.bbox_embed(hs).sigmoid()
-
-        # src_base = self.query_pos_box(src)
-        # src_qpos = self.avg_pool(src_base)
-        src_qpos = None
         
         # test 
-        hs, reference = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1], src_qpos)[0:2]
+        hs, reference = self.transformer(self.input_proj(src), mask, self.refpoint_embed.weight, pos[-1])[0:2]
         reference_before_sigmoid = inverse_sigmoid(reference)
         outputs_coords = []
 
         for lvl in range(hs.shape[0]):
-            # tmp = self.bbox_embed(hs[lvl])
+            tmp, _ = self.bbox_embed(hs[lvl])
             # tmp[..., :2] += reference_before_sigmoid
 
             # tmp = self.bbox_embed(self.bbox_hs_map[lvl](hs[lvl]))
-            tmp = self.bbox_embed[lvl](hs[lvl])
+            # tmp = self.bbox_embed[lvl](hs[lvl])
             tmp += reference_before_sigmoid[lvl]
             
             # tmp[..., :2] += reference_before_sigmoid[lvl][..., :2]
@@ -349,9 +350,12 @@ class MLP(nn.Module):
         self.layers = nn.ModuleList(nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim]))
 
     def forward(self, x):
+        in_out = None
         for i, layer in enumerate(self.layers):
             x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
-        return x
+            if i == self.num_layers - 2:
+                in_out = x
+        return x, in_out
 
 
 class ConditionalDETR(nn.Module):

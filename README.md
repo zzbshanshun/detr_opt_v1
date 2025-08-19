@@ -17,3 +17,5 @@ Detr 算法存在收敛较慢问题，按照其论文结果需要迭代500个ep�
 * 使用class 的cost和loss_coef系数；
 * 分类loss使用；
 * query的数量在一定程度上会影响训练结果；
+
+* 解码器中，要使用每层的output输出进行box预测，其预测分支尽量避免对output计算梯度
