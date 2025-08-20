@@ -16,7 +16,6 @@ import util.misc as utils
 from datasets import build_dataset, get_coco_api_from_dataset
 from engine import evaluate, train_one_epoch
 from models import build_model
-from models import build_DABDETR
 
 #'''
 def get_args_parser():
@@ -135,7 +134,6 @@ def main(args):
     random.seed(seed)
 
     model, criterion, postprocessors = build_model(args)
-    # model, criterion, postprocessors = build_DABDETR(args)
     model.to(device)
 
     model_without_ddp = model

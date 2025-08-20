@@ -272,21 +272,11 @@ class TransformerDecoder(nn.Module):
         self.d_model = d_model
         
         self.query_scale = MLP(d_model, d_model, d_model, 2)
-        
-        # self.query_scale_x = MLP(d_model, d_model, d_model//2, 2)
-        # self.query_scale_y = MLP(d_model, d_model, d_model//2, 2)
-        # self.query_scale_xy = MLP(d_model, d_model, d_model//2, 2)
-        self.wh_sine_proj = nn.Linear(d_model//1, d_model//1)
-        # self.wh_sine_proj_x = nn.Linear(d_model//2, d_model//2)
-        # self.wh_sine_proj_y = nn.Linear(d_model//2, d_model//2)
+        self.wh_sine_proj = nn.Linear(d_model, d_model)
 
         # self.out_qscale = nn.Linear(d_model, d_model//2)
         # self.out_proj = nn.Linear(d_model, d_model)
-
         self.out_proj = None
-        # self.out_proj = MLP(d_model, d_model, 4, 3)
-
-        # self.norm_scale = nn.LayerNorm(d_model)
         
         # self.qref_point_head = MLP(d_model, d_model, 4, 3) 
         # nn.init.constant_(self.qref_point_head.layers[-1].weight.data, 0)
@@ -332,10 +322,6 @@ class TransformerDecoder(nn.Module):
             if layer_id == 0:
                 pos_transformation = 1
             else:
-                # pos_transformation = self.query_scale(output)
-                # box_embed = self.ref_point_maps[layer_id-1](box_embed)
-                # box_off_embed = box_embed.flatten(2).permute(2, 0, 1)
-                
                 output_ckp = output.detach()
                 box, _ = self.out_proj(output_ckp)                
                 box += inverse_sigmoid(reference_points)
@@ -347,6 +333,7 @@ class TransformerDecoder(nn.Module):
             query_sine_wh = query_sine[..., self.d_model:]
             
             if layer_id != 0:
+                # pos_transformation = self.query_scale(output)
                 pos_transformation = self.query_scale(output_ckp + self.wh_sine_proj(query_sine_wh))
             
             query_sine_embed = query_sine_xy*pos_transformation
@@ -564,7 +551,6 @@ class TransformerEncoderLayer(nn.Module):
         src = self.norm2(src)
         return src
 
-
 '''
 class TransformerDecoderLayer(nn.Module):
 
@@ -760,119 +746,6 @@ class TransformerDecoderLayer(nn.Module):
         return self.forward_post(tgt, memory, tgt_mask, memory_mask,
                                  tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos, query_sine_embed, is_first)
 '''
-#'''
-
-'''
-class TransformerEncoder(nn.Module):
-
-    def __init__(self, encoder_layer, num_layers, norm=None, d_model = 256):
-        super().__init__()
-        self.layers = _get_clones(encoder_layer, num_layers)
-        self.num_layers = num_layers
-        self.norm = norm
-                
-        # self.qref_embed_maps = nn.ModuleList(nn.Conv2d(d_model, d_model, kernel_size=1) for i in range(num_layers-1))
-        # self.ref_pos = nn.Linear(d_model, 2)
-
-    def forward(self, src,
-                mask: Optional[Tensor] = None,
-                src_key_padding_mask: Optional[Tensor] = None,
-                pos: Optional[Tensor] = None,
-                qref_embed: Optional[Tensor] = None):
-        output = src
-
-        for lid, layer in enumerate(self.layers):
-            # if layer == 0:
-            #     qref_pos_embed = qref_embed.flatten(2).permute(2, 0, 1)
-            # else:
-            #     qref_pos_embed = self.qref_embed_maps[lid-1](qref_embed).flatten(2).permute(2, 0, 1)
-                
-            # ref_center = self.ref_pos(qref_pos_embed)
-            # qref_pos_sine_embed = gen_sineembed_for_position(ref_center)
-            
-            qref_pos_sine_embed = None
-            
-            output = layer(output, src_mask=mask,
-                           src_key_padding_mask=src_key_padding_mask, pos=pos,
-                           qref_pos_embed = qref_pos_sine_embed)
-
-        if self.norm is not None:
-            output = self.norm(output)
-
-        return output
-
-class TransformerEncoderLayer(nn.Module):
-
-    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
-                 activation="relu", normalize_before=False):
-        super().__init__()
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
-        
-        hidden_dim = dim_feedforward // 1
-        # Implementation of Feedforward model
-        self.linear1 = nn.Linear(d_model, hidden_dim)
-        self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(hidden_dim, d_model)
-
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.dropout1 = nn.Dropout(dropout)
-        self.dropout2 = nn.Dropout(dropout)
-
-        self.activation = _get_activation_fn(activation)
-        self.normalize_before = normalize_before
-
-    def with_pos_embed(self, tensor, pos: Optional[Tensor]):
-        return tensor if pos is None else tensor + pos
-
-    def forward_post(self,
-                     src,
-                     src_mask: Optional[Tensor] = None,
-                     src_key_padding_mask: Optional[Tensor] = None,
-                     pos: Optional[Tensor] = None,
-                     qref_pos_embed: Optional[Tensor] = None):
-        q = k = self.with_pos_embed(src, pos)
-        # k = self.with_pos_embed(src, qref_pos_embed)
-        # q = self.with_pos_embed(src, pos)
-                
-        src2 = self.self_attn(q, k, value=src, attn_mask=src_mask,
-                              key_padding_mask=src_key_padding_mask)[0]
-        src = src + self.dropout1(src2)
-        src = self.norm1(src)
-        src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
-        src = src + self.dropout2(src2)
-        src = self.norm2(src)
-        
-        return src
-
-    def forward_pre(self, src,
-                    src_mask: Optional[Tensor] = None,
-                    src_key_padding_mask: Optional[Tensor] = None,
-                    pos: Optional[Tensor] = None,
-                    qref_pos_embed: Optional[Tensor] = None):
-        src2 = self.norm1(src)
-        # q = k = self.with_pos_embed(src2, pos)
-        k = self.with_pos_embed(src, pos)
-        q = self.with_pos_embed(src, qref_pos_embed)
-        
-        src2 = self.self_attn(q, k, value=src2, attn_mask=src_mask,
-                              key_padding_mask=src_key_padding_mask)[0]
-        src = src + self.dropout1(src2)
-        src2 = self.norm2(src)
-        src2 = self.linear2(self.dropout(self.activation(self.linear1(src2))))
-        src = src + self.dropout2(src2)
-        return src
-
-    def forward(self, src,
-                src_mask: Optional[Tensor] = None,
-                src_key_padding_mask: Optional[Tensor] = None,
-                pos: Optional[Tensor] = None,
-                qref_pos_embed: Optional[Tensor] = None):
-        if self.normalize_before:
-            return self.forward_pre(src, src_mask, src_key_padding_mask, pos, qref_pos_embed)
-        return self.forward_post(src, src_mask, src_key_padding_mask, pos, qref_pos_embed)
-'''
-
 
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
