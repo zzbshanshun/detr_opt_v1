@@ -1,6 +1,6 @@
 ## nohup bash run_train_det.sh 0.00010 > ./output/mdx/train_det_1.log 2>&1 &
 # conda activate troch_2.4.0
-OutputDir=./output/md49
+OutputDir=./output/md51
 BatchSize=7
 
 if [ $# -eq 1 ] ; then
