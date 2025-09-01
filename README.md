@@ -3,19 +3,30 @@
 optimized detr from original detr and conditional detr.
 
 # 参考(References)
-* [ConditionalDETR](https://github.com/Atten4Vis/ConditionalDETR/blob/main/.github/convergence-curve.png)
+* [ConditionalDETR](https://github.com/Atten4Vis/ConditionalDETR/tree/main)，下文简称CDter；
 * [DETR](https://github.com/facebookresearch/detr)
+* [DAB-DETR](https://github.com/IDEA-Research/DAB-DETR)，下文简称DAB；
 
 
 [![Support Ukraine](https://img.shields.io/badge/Support-Ukraine-FFD500?style=flat&labelColor=005BBB)](https://opensource.fb.com/support-ukraine)
 
-# 背景
+# 1.背景
 Detr 算法存在收敛较慢问题，按照其论文结果需要迭代500个ep才能完成，针对该问题后续研究者提出较多的有效方法，其中ConditionalDETR以较为简单直接的方式大幅提升了训练效率。这里参考后者的思路，在detr原有代码上进行对比试验，得出几个影响收敛速度的因素，并做了针对性修改。在单卡（4080s）上获得较好的收敛速度。  
-**首先，通过对比试验，得到影响因素有如下几点，重要程度由高到低**：  
-* query的position embedding是否显示参与训练；
-* decoder交叉注意力计算时context与position是否进行分离，以及分离方式；
-* 使用class 的cost和loss_coef系数；
-* 分类loss使用；
-* query的数量在一定程度上会影响训练结果；
 
-* 解码器中，要使用每层的output输出进行box预测，其预测分支尽量避免对output计算梯度
+# 2.收敛影响因素
+> **通过对比试验，得到如下几点影响因:**：
+* query的position embedding使用方式，主要是是否参与显示的box预测；
+* decoder交叉注意力计算时context与position是否进行分离，以及分离方式；
+* loss计算中class 部分的权重；
+* 分类loss使用；
+* query的数量；
+> CDetr和DAB中的已有方法中改进点：
+* query position embedding改进：
+  * CDetr中基于原有embedding对每个query的中心坐标预测，并将其编码后作为解码器中每层position embedding输入；最有使用预测中心作为output预测的偏移矫正；
+  * DAB中
+* decoder交叉注意力计算改进：
+* loss修改：
+* query数量：
+
+
+* 解码器中，要使用每层的output输出进行box预测，其预测分支尽量避免对output计算梯度；
