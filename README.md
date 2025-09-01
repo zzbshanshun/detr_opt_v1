@@ -23,10 +23,13 @@ Detr 算法存在收敛较慢问题，按照其论文结果需要迭代500个ep�
 > CDetr和DAB中的已有方法中改进点：
 * query position embedding改进：
   * CDetr中基于原有embedding对每个query的中心坐标预测，并将其编码后作为解码器中每层position embedding输入；最有使用预测中心作为output预测的偏移矫正；
-  * DAB中
+  * DAB中采用直接生成参考点box=(x,y,w,h)，在解码器中通过参考点编码生成query的position embedding，并通过每层output输出进行微调，作为下一层输入；
 * decoder交叉注意力计算改进：
+  * DAB中沿用了CDetr的方式，将context与position以concat方式进行解耦计算；
 * loss修改：
+  * CDetr和DAB相同都采用Sigmoid Focal Loss替换原有softmax；
 * query数量：
+  * 两者均将query数量从原有的100提升到300，配合focal loss对训练收敛有一定程度的优化效果；
 
 
 * 解码器中，要使用每层的output输出进行box预测，其预测分支尽量避免对output计算梯度；
